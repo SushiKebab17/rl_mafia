@@ -1,99 +1,126 @@
-mod commands;
+use ::serenity::all::{Mentionable, UserId, VoiceState};
+use poise::{serenity_prelude as serenity, PrefixFrameworkOptions};
 
-use serenity::{
-    all::{CreateInteractionResponse, CreateInteractionResponseMessage},
-    async_trait,
-    model::{
-        application::{Command, Interaction},
-        channel::Message,
-        gateway::Ready,
-        id::GuildId,
-    },
-    prelude::*,
-};
+use std::collections::HashMap;
 
-use mafia;
+struct Data {} // User data, which is stored and accessible in all command invocations
+type Error = Box<dyn std::error::Error + Send + Sync>;
+type Context<'a> = poise::Context<'a, Data, Error>;
 
-struct Handler;
+/// Displays your or another user's account creation date
+#[poise::command(slash_command, prefix_command)]
+async fn age(
+    ctx: Context<'_>,
+    #[description = "Selected user"] user: Option<serenity::User>,
+) -> Result<(), Error> {
+    let u = user.as_ref().unwrap_or_else(|| ctx.author());
+    let response = format!("{}'s account was created at {}", u.name, u.created_at());
+    ctx.say(response).await?;
+    Ok(())
+}
 
-#[async_trait]
-impl EventHandler for Handler {
-    // set handler for "message" event - called whenever a new message is received
-    async fn message(&self, ctx: Context, msg: Message) {
-        if msg.content == "!ping" {
-            if let Err(why) = msg.channel_id.say(&ctx.http, "Pong!").await {
-                println!("Error sending message: {why:?}");
-            }
+/// Create a new game of Mafia with the people in your VC.
+#[poise::command(slash_command, prefix_command)]
+async fn new(ctx: Context<'_>) -> Result<(), Error> {
+    // let cache = ctx.cache();
+    let user = ctx.author();
+    // let guild = ctx.guild().unwrap();
+
+    // let mut user_in_vc = false;
+    // let mut players = Vec::new();
+
+    // let voice_states: &HashMap<UserId, VoiceState> = &guild.voice_states;
+
+    // // println!("{:#?}", voice_states);
+
+    // // if voice_states.is_empty() {
+    // //     return Err("User not in a voice channel".into());
+    // // }
+    // let user_vc;
+    // if let Some(channel_id) = voice_states[&(user.id)].channel_id {
+    //     user_vc = channel_id;
+    // } else {
+    //     return Err("User not in a voice channel".into());
+    // }
+
+    // for (user_id, voice_state) in voice_states {
+    //     if let Some(c_id) = voice_state.channel_id {
+    //         if c_id == user_vc {
+    //             players.push(user_id);
+    //             // user_in_vc = true;
+    //         }
+    //     }
+    // }
+
+    let players: Vec<UserId> = {
+        let Some(guild) = ctx.guild() else {
+            return Err("No guild".into());
+        };
+
+        let voice_states: &HashMap<UserId, VoiceState> = &guild.voice_states;
+        let user_vc;
+        if let Some(channel_id) = voice_states[&(user.id)].channel_id {
+            user_vc = channel_id;
+        } else {
+            return Err("User not in a voice channel".into());
         }
-    }
 
-    async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
-        if let Interaction::Command(command) = interaction {
-            println!("Received command interaction: {:?}", command);
+        guild
+            .voice_states
+            .iter()
+            .filter(|(_, state)| state.channel_id.is_some_and(|c_id| c_id == user_vc))
+            .map(|(user_id, _)| *user_id)
+            .collect()
+    };
 
-            let content = match command.data.name.as_str() {
-                "ping" => Some(commands::ping::run(&command.data.options())),
-                "new" => Some(commands::new::run(&command.data.options())),
-                _ => Some("not implemented :(".to_string()),
-            };
+    println!("{:?}", players);
 
-            if let Some(content) = content {
-                let data = CreateInteractionResponseMessage::new().content(content);
-                let builder = CreateInteractionResponse::Message(data);
-                if let Err(why) = command.create_response(&ctx.http, builder).await {
-                    println!("Cannot respond to slash command: {}", why);
-                }
-            }
-        }
-    }
+    let embed = serenity::CreateEmbed::new().title("Players:").fields(vec![(
+        "test",
+        &user.id.mention().to_string(),
+        true,
+    )]);
 
-    // set handler for the "ready" event - in this case, just prints out the current user's username.
-    async fn ready(&self, ctx: Context, ready: Ready) {
-        println!("{} is connected!", ready.user.name);
+    ctx.send(poise::CreateReply::default().embed(embed).reply(false))
+        .await?;
 
-        let server = include_str!("GuildToken.txt")
-            .split_whitespace()
-            .next()
-            .unwrap()
-            .parse()
-            .unwrap();
-
-        let guild_id = GuildId::new(server);
-
-        let commands = guild_id
-            .set_commands(&ctx.http, vec![commands::ping::register()])
-            .await;
-
-        println!("I now have the following guild slash commands: {commands:#?}");
-
-        // let guild_command =
-        //     Command::create_global_command(&ctx.http, commands::wonderful_command::register())
-        //         .await;
-
-        // println!("I created the following global slash command: {guild_command:#?}");
-    }
+    Ok(())
 }
 
 #[tokio::main]
 async fn main() {
-    let intents = GatewayIntents::GUILD_MESSAGES
-        | GatewayIntents::DIRECT_MESSAGES
-        | GatewayIntents::MESSAGE_CONTENT;
-
     let token = include_str!("BotToken.txt")
         .split_whitespace()
         .next()
         .unwrap();
-    // let id = ids.next().unwrap().parse().unwrap();
+    let intents = serenity::GatewayIntents::non_privileged()
+        | serenity::GatewayIntents::GUILD_MESSAGES
+        | serenity::GatewayIntents::DIRECT_MESSAGES
+        | serenity::GatewayIntents::MESSAGE_CONTENT
+        | serenity::GatewayIntents::GUILD_MEMBERS
+        | serenity::GatewayIntents::GUILD_VOICE_STATES
+        | serenity::GatewayIntents::GUILDS;
+    let prefix_options = PrefixFrameworkOptions {
+        prefix: Some("!!".into()),
+        ..Default::default()
+    };
 
-    // creates instance of Client, logging in as a bot.
-    let mut client = Client::builder(&token, intents)
-        .event_handler(Handler)
-        .await
-        .expect("Err creating client");
+    let framework = poise::Framework::builder()
+        .options(poise::FrameworkOptions {
+            commands: vec![age(), new()],
+            prefix_options,
+            ..Default::default()
+        })
+        .setup(|ctx, _ready, framework| {
+            Box::pin(async move {
+                poise::builtins::register_globally(ctx, &framework.options().commands).await?;
+                Ok(Data {})
+            })
+        })
+        .build();
 
-    // starts a single shard which listens to events.
-    if let Err(why) = client.start().await {
-        println!("Client error: {why:?}");
-    }
+    let client = serenity::ClientBuilder::new(token, intents)
+        .framework(framework)
+        .await;
+    client.unwrap().start().await.unwrap();
 }
